@@ -1,7 +1,9 @@
-import RPi.GPIO as GPIO
-import websocket
 import json
+import RPi.GPIO as GPIO
 import time
+from flask import Flask, request
+
+app = Flask(__name__)
 
 #motorA_en = 17
 motorA_forward = 22
@@ -25,7 +27,6 @@ GPIO.setup(motorB_backward, GPIO.OUT)
 # pwm_B = GPIO.PWM(motorB_en, 1000)
 # pwm_A.start(0)
 # pwm_B.start(0)
-
 
 def control_motor(motor, action, speed):
 	if motor == 'A':
@@ -69,30 +70,11 @@ def control_motor(motor, action, speed):
 		#pwm_A.ChangeDutyCycle(0)
 		#pwm_B.ChangeDutyCycle(0)
 	return
-
-def on_message(ws, message):
-	data = json.loads(message)
-	motor = data['motor']
-	action = data['action']
-	speed = int(data['speed'])
-	control_motor(motor, action, speed)
-
-def on_error(ws, error):
-	print(error)
-
-def on_close(ws):
-	print("### closed ###")
-	GPIO.cleanup()
+@app.route('/command', methods=['POST'])
+def handle_command():
+	data = request.json
+	control_motor(data['motor'], data['action'], data['speed'])
+	return {"status":success}
+	
 if __name__ == "__main__":
-	websocket.enableTrace(True)
-	#control_motor('A', 'forward', 50)
-	time.sleep(5)
-	#control_motor('A', 'stop', 50)
-	ws = websocket.WebSocketApp("ws://172.20.10.4:8080",
-	on_message = on_message, on_error = on_error, on_close = on_close)
-	print(f"Message: {on_message}, Error: {on_error}, Close: {on_close}")
-	ws.run_forever()
-# if __name__ == "__main__":
-	# with connect("ws://172.20.10.4:8080") as websocket:
-		# message = websocket.recv()
-		
+	app.run(host='0.0.0.0', port=5000)
