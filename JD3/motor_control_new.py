@@ -1,27 +1,23 @@
-import requests
 import json
 import RPi.GPIO as GPIO
 import time
-from flask import Flask, render_template, request, jsonify
-from aiortc import RTCPeerConnection, RTCSessionDescription, VideoStreamTrack, MediaStreamTrack
-from aiortc.contrib.media import MediaPlayer, MediaRelay
-import asyncio
-from picamera.array import PiRGBArray
+from flask import Flask, request, send_file
 from picamera import PiCamera
-import cv2
-import numpy as np
-
+from io import BytesIO
+import subprocess
 
 app = Flask(__name__)
-pcs = set()
+camera = PiCamera()
+camera.resolution = (640,840)
+#camera.start_preview()
 
 #motorA_en = 17
-motorA_forward = 22
+motorA_forward = 17
 motorA_backward = 27
 
 #motorB_en = 5
-motorB_forward = 6
-motorB_backward = 13
+motorB_forward = 22
+motorB_backward = 23
 
 GPIO.setmode(GPIO.BCM)
 
@@ -77,57 +73,37 @@ def control_motor(motor, action, speed):
 		GPIO.output(motorB_forward, GPIO.LOW)
 		GPIO.output(motorA_backward, GPIO.LOW)
 		GPIO.output(motorB_backward, GPIO.LOW)
+	elif action == 'shutdown':
+		try:
+			cleanup_gpio()
+			subprocess.Popen(['sudo', 'shutdown', 'now'])
+		except Exception as e:
+			print(f"Error executing shutdown command: {e}")
 		#pwm_A.ChangeDutyCycle(0)
 		#pwm_B.ChangeDutyCycle(0)
 	return
 
-class CameraStreamTrack(MediaStreamTrack):
-    """
-    A video stream track that streams video from the Raspberry Pi Camera.
-    """
-    kind = "video"
+def cleanup_gpio():
+	GPIO.output(motorA_forward, GPIO.LOW)
+	GPIO.output(motorB_forward, GPIO.LOW)
+	GPIO.output(motorA_backward, GPIO.LOW)
+	GPIO.output(motorB_backward, GPIO.LOW)
+	GPIO.cleanup()
+	
+@app.route('/capture', methods=['GET'])
+def capture():
+	stream = BytesIO()
+	camera.capture(stream, 'jpeg')
+	stream.seek(0)
+	return send_file(stream, mimetype='image/jpeg')
+	
+@app.route('/command', methods=['POST'])
+def handle_command():
+	data = request.json
+	control_motor(data['motor'], data['action'], data['speed'])
+	return {"status":success}
+	
+	
+if __name__ == "__main__":
+	app.run(host='0.0.0.0', port=5000)
 
-    def __init__(self):
-        super().__init__()
-        self.camera = PiCamera(resolution=(640, 480), framerate=24)
-        self.rawCapture = PiRGBArray(self.camera, size=(640, 480))
-        self.stream = self.camera.capture_continuous(self.rawCapture,
-                                                     format="bgr", use_video_port=True)
-        self.frame = None
-        self._relay = MediaRelay()
-
-    async def recv(self):
-        while True:
-            for f in self.stream:
-                frame = f.array
-                self.frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                self.rawCapture.truncate(0)
-                return self._relay.track(self).recv()
-
-
-@app.route('/')
-def index():
-    """Serve the control page."""
-    return render_template('control.ejs')  # Ensure you have this file set as .html or render correctly
-
-@app.route('/offer', methods=['POST'])
-async def on_offer():
-    params = request.get_json()
-    offer = RTCSessionDescription(sdp=params["sdp"], type=params["type"])
-    pc = RTCPeerConnection()
-    pc.addTrack(CameraStreamTrack())
-
-    @pc.on("iceconnectionstatechange")
-    async def on_iceconnectionstatechange():
-        if pc.iceConnectionState == "failed":
-            await pc.close()
-            pcs.discard(pc)
-
-    await pc.setRemoteDescription(offer)
-    answer = await pc.createAnswer()
-    await pc.setLocalDescription(answer)
-
-    return jsonify({"sdp": pc.localDescription.sdp, "type": pc.localDescription.type})
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, ssl_context='adhoc')  # Make sure to use HTTPS in production
